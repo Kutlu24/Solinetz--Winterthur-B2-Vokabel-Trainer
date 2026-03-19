@@ -313,6 +313,82 @@ function doAudio() {
 }
 
 // Metinleri sırayla seslendir — onend zinciri ile güvenli kuyruk
+// ── SES SİSTEMİ ────────────────────────────────────────
+// Masaüstü: Karsten/Hedda/Katja/Stefan tercih edilir
+// Mobil (iOS/Android): bu sesler yok, mevcut Almanca sesi kullanılır
+// iOS sorunu: sesler geç yüklenir + kullanıcı etkileşimi şart
+
+let _selectedVoice = null;
+const PREFERRED = ["Karsten", "Hedda", "Katja", "Stefan"];
+
+function pickVoice() {
+  const all = window.speechSynthesis.getVoices();
+  if (!all.length) return null;
+
+  // Masaüstü: tercih listesinden bul
+  for (const name of PREFERRED) {
+    const v = all.find(v => v.name.includes(name) && v.lang.startsWith("de"));
+    if (v) return v;
+  }
+  // Mobil fallback: herhangi Almanca ses
+  return all.find(v => v.lang === "de-DE")
+      || all.find(v => v.lang.startsWith("de"))
+      || null;
+}
+
+function populateVoiceSelect() {
+  const all = window.speechSynthesis.getVoices();
+  if (!all.length) return; // henüz yüklenmediyse bekle
+
+  // _selectedVoice'u güncelle
+  if (!_selectedVoice) _selectedVoice = pickVoice();
+
+  const sel = document.getElementById("voice-select");
+  if (!sel) return;
+
+  // Masaüstünde 4 ses, mobilde mevcut Almanca sesler
+  const deVoices = all.filter(v => v.lang.startsWith("de"));
+  const preferred = PREFERRED
+    .map(name => deVoices.find(v => v.name.includes(name)))
+    .filter(Boolean);
+  const showList = preferred.length ? preferred : deVoices;
+
+  if (!showList.length) {
+    sel.innerHTML = "<option value=''>Sistem sesi</option>";
+    return;
+  }
+
+  const prev = sel.value; // mevcut seçimi koru
+  sel.innerHTML = "";
+  showList.forEach(v => {
+    const o = document.createElement("option");
+    o.value = v.name;
+    o.innerText = v.name
+      .replace("Microsoft ", "")
+      .replace(/ - German.*/,"")
+      .replace(/ \(Natural\).*/,"");
+    if (_selectedVoice && v.name === _selectedVoice.name) o.selected = true;
+    else if (v.name === prev) o.selected = true;
+    sel.appendChild(o);
+  });
+}
+
+function setVoice(name) {
+  const all = window.speechSynthesis.getVoices();
+  _selectedVoice = all.find(v => v.name === name) || _selectedVoice;
+}
+
+// Sesler hazır olduğunda doldur (masaüstü + mobil)
+if (window.speechSynthesis) {
+  window.speechSynthesis.onvoiceschanged = populateVoiceSelect;
+  // Masaüstünde zaten hazır gelir
+  populateVoiceSelect();
+  // iOS/Android için birkaç deneme — sesler geç yüklenir
+  [300, 800, 1500, 3000].forEach(ms =>
+    setTimeout(populateVoiceSelect, ms)
+  );
+}
+
 function ttsSpeak(parts) {
   if (!window.speechSynthesis) return;
   window.speechSynthesis.cancel();
@@ -320,19 +396,22 @@ function ttsSpeak(parts) {
   const list = parts.map(p => (p||"").trim()).filter(Boolean);
   if (!list.length) return;
 
-  // Ses seçimini burada yenile — dropdown'daki güncel seçimi oku
+  // Her çalmadan önce sesi güncelle (dropdown seçimi)
   const sel = document.getElementById("voice-select");
   if (sel && sel.value) {
-    const all = window.speechSynthesis.getVoices();
-    const found = all.find(v => v.name === sel.value);
+    const found = window.speechSynthesis.getVoices().find(v => v.name === sel.value);
     if (found) _selectedVoice = found;
   }
+  // Hâlâ yoksa tekrar dene
+  if (!_selectedVoice) _selectedVoice = pickVoice();
 
   let idx = 0;
+
   function next() {
     if (idx >= list.length) return;
-    const u = new SpeechSynthesisUtterance(list[idx++]);
-    // voice atandıktan SONRA lang atama — override sorununu önler
+    const text = list[idx++];
+    const u = new SpeechSynthesisUtterance(text);
+
     if (_selectedVoice) {
       u.voice = _selectedVoice;
       u.lang  = _selectedVoice.lang;
@@ -344,52 +423,18 @@ function ttsSpeak(parts) {
     u.volume = 1;
     u.onend  = next;
     u.onerror = next;
+
+    // iOS bug: uzun metinlerde speechSynthesis donabiliyor
+    // Workaround: resume() çağrısı
     window.speechSynthesis.speak(u);
+    if (window.speechSynthesis.paused) window.speechSynthesis.resume();
   }
+
   next();
 }
 
 function tts(text) {
   if (text) ttsSpeak([text]);
-}
-
-// ── SES SEÇİCİ — sadece 4 ses: Karsten, Hedda, Katja, Stefan ──
-// Bu 4 ses tüm tarayıcılarda (Edge/Chrome/Firefox) çalışır.
-
-let _selectedVoice = null;
-
-const PREFERRED = ["Karsten", "Hedda", "Katja", "Stefan"];
-
-function populateVoiceSelect() {
-  const sel = document.getElementById("voice-select");
-  if (!sel) return;
-
-  const all = window.speechSynthesis.getVoices();
-  // Sadece istenen 4 ses
-  const filtered = PREFERRED
-    .map(name => all.find(v => v.name.includes(name) && v.lang.startsWith("de")))
-    .filter(Boolean);
-
-  if (!filtered.length) return;
-
-  sel.innerHTML = "";
-  filtered.forEach((v, i) => {
-    const o = document.createElement("option");
-    o.value = v.name;
-    o.innerText = v.name.replace("Microsoft ","").replace(/ - German.*/,"");
-    sel.appendChild(o);
-    if (i === 0) _selectedVoice = v; // varsayılan: Karsten
-  });
-}
-
-function setVoice(name) {
-  const all = window.speechSynthesis.getVoices();
-  _selectedVoice = all.find(v => v.name === name) || _selectedVoice;
-}
-
-if (window.speechSynthesis) {
-  window.speechSynthesis.onvoiceschanged = populateVoiceSelect;
-  setTimeout(populateVoiceSelect, 200);
 }
 
 function doLearned() {
