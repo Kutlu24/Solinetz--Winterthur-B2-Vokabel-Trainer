@@ -278,73 +278,10 @@ function doFlip() {
   if (inner.classList.contains("flipped")) doAudio();
 }
 
-// ── SES SİSTEMİ ────────────────────────────────────────
-// Google TTS API — tarayıcıdan bağımsız, Edge/Chrome/Firefox hepsinde çalışır
-// Almanca (de) için doğal, kaliteli ses üretir, API key gerekmez.
+// ── SES SİSTEMİ (Web Speech API) ──────────────────────
+// Tüm tarayıcılarda standart çalışır.
+// opus dosyası → kelimeyi çalar, bitince gramer+cümle TTS ile okunur.
 
-const TTS_LANG = "de";
-const TTS_SLOW = false;
-
-// Metni Google TTS URL'sine çevir (max ~200 karakter)
-function gttsUrl(text) {
-  const encoded = encodeURIComponent(text.trim().slice(0, 200));
-  return `https://translate.google.com/translate_tts?ie=UTF-8&tl=${TTS_LANG}&client=tw-ob&q=${encoded}`;
-}
-
-// Ses çalma kuyruğu
-let _ttsQueue  = [];
-let _ttsPlaying = false;
-const _ttsAudio = new Audio();
-_ttsAudio.crossOrigin = "anonymous";
-
-_ttsAudio.onended = () => {
-  _ttsPlaying = false;
-  playNextInQueue();
-};
-_ttsAudio.onerror = () => {
-  _ttsPlaying = false;
-  playNextInQueue(); // hata olursa sıradakine geç
-};
-
-function playNextInQueue() {
-  if (!_ttsQueue.length) return;
-  const url = _ttsQueue.shift();
-  _ttsPlaying = true;
-  _ttsAudio.src = url;
-  _ttsAudio.load();
-  _ttsAudio.play().catch(() => { _ttsPlaying = false; playNextInQueue(); });
-}
-
-// Metinleri kuyruğa ekle ve çal
-function ttsSpeak(parts) {
-  _ttsQueue = [];
-  _ttsPlaying = false;
-  _ttsAudio.pause();
-
-  const filtered = parts.map(p => (p||"").trim()).filter(Boolean);
-  if (!filtered.length) return;
-
-  filtered.forEach(text => _ttsQueue.push(gttsUrl(text)));
-  playNextInQueue();
-}
-
-function tts(text) {
-  if (text) ttsSpeak([text]);
-}
-
-// Ses dropdown'ını "Google TTS (Almanca)" olarak doldur — değiştirilemez
-function populateVoiceSelect() {
-  const sel = document.getElementById("voice-select");
-  if (!sel) return;
-  sel.innerHTML = `<option value="google-de" selected>Google TTS – Deutsch ✓</option>`;
-  sel.disabled = true;
-}
-function setVoice() {} // Google TTS kullandığımız için değiştirme yok
-function loadVoices() { populateVoiceSelect(); }
-
-setTimeout(populateVoiceSelect, 200);
-
-// ── AUDIO OYNATICI (opus dosyaları için) ──────────────
 function doAudio() {
   const item = m1Session[m1Index];
   if (!item) return;
@@ -353,31 +290,75 @@ function doAudio() {
   const file = item[K_AUDIO] || item[K_AUDIO2] || "";
 
   if (isFlipped) {
-    // Arka yüz: Beispielsatz'ı seslendir
     ttsSpeak([item[K_SENT] || ""]);
   } else {
-    // Ön yüz: opus varsa kelimeyi çal, bitince gramer+cümleyi TTS ile oku
     if (file) {
       const opusEl = document.getElementById("m1-audio");
       opusEl.src = file;
       opusEl.currentTime = 0;
       opusEl.onended = null;
-
       opusEl.play()
         .then(() => {
           opusEl.onended = () => {
-            const parts = [item[K_GRAMM]||"", item[K_SENT]||""].filter(Boolean);
-            ttsSpeak(parts);
+            ttsSpeak([item[K_GRAMM]||"", item[K_SENT]||""].filter(Boolean));
           };
         })
         .catch(() => {
-          // opus çalamazsa tümünü TTS ile oku
           ttsSpeak([item[K_WORT]||"", item[K_GRAMM]||"", item[K_SENT]||""].filter(Boolean));
         });
     } else {
       ttsSpeak([item[K_WORT]||"", item[K_GRAMM]||"", item[K_SENT]||""].filter(Boolean));
     }
   }
+}
+
+// Metinleri sırayla seslendir — onend zinciri ile güvenli kuyruk
+function ttsSpeak(parts) {
+  if (!window.speechSynthesis) return;
+  window.speechSynthesis.cancel();
+
+  const list = parts.map(p => (p||"").trim()).filter(Boolean);
+  if (!list.length) return;
+
+  let idx = 0;
+  function next() {
+    if (idx >= list.length) return;
+    const u = new SpeechSynthesisUtterance(list[idx++]);
+    u.lang   = "de-DE";
+    u.rate   = 0.9;
+    u.pitch  = 1;
+    u.volume = 1;
+    u.onend  = next;
+    u.onerror = next;
+    window.speechSynthesis.speak(u);
+  }
+  next();
+}
+
+function tts(text) {
+  if (text) ttsSpeak([text]);
+}
+
+// Ses seçici — tarayıcının mevcut Almanca seslerini listeler
+function populateVoiceSelect() {
+  const sel = document.getElementById("voice-select");
+  if (!sel) return;
+  const voices = window.speechSynthesis.getVoices().filter(v => v.lang.startsWith("de"));
+  if (!voices.length) return;
+  sel.innerHTML = "";
+  voices.forEach(v => {
+    const o = document.createElement("option");
+    o.value = v.name;
+    o.innerText = v.name.replace("Microsoft ","").replace(" - German (Germany)"," (DE)").replace(" - German (Switzerland)"," (CH)").replace(" - German (Austria)"," (AT)");
+    sel.appendChild(o);
+  });
+}
+
+function setVoice() {} // Şu an kullanılmıyor — tüm tarayıcılarda varsayılan Almanca ses
+
+if (window.speechSynthesis) {
+  window.speechSynthesis.onvoiceschanged = populateVoiceSelect;
+  setTimeout(populateVoiceSelect, 200);
 }
 
 function doLearned() {
