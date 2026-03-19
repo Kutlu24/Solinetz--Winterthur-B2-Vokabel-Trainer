@@ -327,16 +327,77 @@ function doAudio() {
   }
 }
 
+// Ses tercihi: Edge öncelik sırası
+// 1) Microsoft Konrad (Edge Azure Neural)
+// 2) Diğer Microsoft Almanca sesler
+// 3) Diğer Almanca sesler (Google hariç)
+// 4) Herhangi Almanca ses
+let _deVoice = null;
+let _voicesLoaded = false;
+
+function loadVoices() {
+  if (_voicesLoaded) return;
+  const voices = window.speechSynthesis.getVoices();
+  if (!voices.length) return;
+  _voicesLoaded = true;
+
+  // Öncelik sırası
+  _deVoice =
+    voices.find(v => v.name.includes("Konrad"))                          // Edge: Microsoft Konrad
+    || voices.find(v => v.name.includes("Microsoft") && v.lang === "de-DE" && v.name.includes("Neural"))
+    || voices.find(v => v.name.includes("Microsoft") && v.lang.startsWith("de"))
+    || voices.find(v => v.lang === "de-DE" && !v.name.toLowerCase().includes("google"))
+    || voices.find(v => v.lang.startsWith("de"));
+
+  console.log("Seçilen ses:", _deVoice ? _deVoice.name : "varsayılan");
+}
+
+// Ses listesi bazen gecikmeli yüklenir (Chrome/Edge davranışı)
+if (window.speechSynthesis) {
+  window.speechSynthesis.onvoiceschanged = () => { loadVoices(); populateVoiceSelect(); };
+  loadVoices();
+  populateVoiceSelect();
+}
+
+// Ses dropdown'ını doldur — sadece Almanca sesler
+function populateVoiceSelect() {
+  const sel = document.getElementById("voice-select");
+  if (!sel) return;
+  const voices = window.speechSynthesis.getVoices();
+  const deVoices = voices.filter(v => v.lang.startsWith("de"));
+  if (!deVoices.length) return;
+
+  sel.innerHTML = "";
+
+  // Önce Konrad ve Microsoft seslerini üste al
+  const sorted = [
+    ...deVoices.filter(v => v.name.includes("Konrad")),
+    ...deVoices.filter(v => v.name.includes("Microsoft") && !v.name.includes("Konrad")),
+    ...deVoices.filter(v => !v.name.includes("Microsoft")),
+  ];
+
+  sorted.forEach(v => {
+    const o = document.createElement("option");
+    o.value = v.name;
+    // Edge Neural seslerini belirt
+    const tag = v.name.includes("Neural") ? " ⭐" : v.name.includes("Microsoft") ? " ✓" : "";
+    o.innerText = v.name.replace("Microsoft ", "").replace(" Online (Natural) - German (Germany)", "") + tag;
+    if (_deVoice && v.name === _deVoice.name) o.selected = true;
+    sel.appendChild(o);
+  });
+}
+
+// Kullanıcı ses seçtiğinde
+function setVoice(name) {
+  const voices = window.speechSynthesis.getVoices();
+  _deVoice = voices.find(v => v.name === name) || _deVoice;
+}
+
 // Metinleri sırayla, doğal sesle seslendir
 function ttsSpeak(parts) {
   if (!parts.length || !window.speechSynthesis) return;
   window.speechSynthesis.cancel();
-
-  // Tarayıcı ses listesi hazır mı?
-  const voices = window.speechSynthesis.getVoices();
-  const deVoice = voices.find(v =>
-    v.lang.startsWith("de") && !v.name.toLowerCase().includes("google")
-  ) || voices.find(v => v.lang.startsWith("de")) || null;
+  loadVoices(); // henüz yüklenmediyse tekrar dene
 
   let i = 0;
   function speakNext() {
@@ -346,10 +407,12 @@ function ttsSpeak(parts) {
 
     const u = new SpeechSynthesisUtterance(text);
     u.lang  = "de-DE";
-    u.rate  = i === 1 ? 0.78 : 0.84;   // kelime yavaş, gramer/cümle biraz hızlı
+    u.rate  = i === 1 ? 0.80 : 0.88;
     u.pitch = 1.0;
-    if (deVoice) u.voice = deVoice;
-    u.onend = speakNext;
+    u.volume = 1.0;
+    if (_deVoice) u.voice = _deVoice;
+    u.onend   = speakNext;
+    u.onerror = speakNext; // hata olursa sonrakine geç
     window.speechSynthesis.speak(u);
   }
   speakNext();
