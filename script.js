@@ -327,73 +327,61 @@ function doAudio() {
   }
 }
 
-// ── SES YÖNETİMİ ──────────────────────────────────────
-// Edge Neural sesleri (Konrad vb.) speechSynthesis ile çalışmıyor.
-// En güvenilir yol: localService:true olan sistem seslerini kullan.
-// Öncelik: Karsten (CH) → Hedda → Stefanie → herhangi Almanca yerel ses
-
+// Ses tercihi: Edge öncelik sırası
+// 1) Microsoft Konrad (Edge Azure Neural)
+// 2) Diğer Microsoft Almanca sesler
+// 3) Diğer Almanca sesler (Google hariç)
+// 4) Herhangi Almanca ses
 let _deVoice = null;
+let _voicesLoaded = false;
 
 function loadVoices() {
-  const all = window.speechSynthesis.getVoices();
-  if (!all.length) return;
+  if (_voicesLoaded) return;
+  const voices = window.speechSynthesis.getVoices();
+  if (!voices.length) return;
+  _voicesLoaded = true;
 
-  const de = all.filter(v => v.lang.startsWith("de"));
+  // Öncelik sırası
+  _deVoice =
+    voices.find(v => v.name.includes("Konrad"))                          // Edge: Microsoft Konrad
+    || voices.find(v => v.name.includes("Microsoft") && v.lang === "de-DE" && v.name.includes("Neural"))
+    || voices.find(v => v.name.includes("Microsoft") && v.lang.startsWith("de"))
+    || voices.find(v => v.lang === "de-DE" && !v.name.toLowerCase().includes("google"))
+    || voices.find(v => v.lang.startsWith("de"));
 
-  // Öncelik: yerel (localService:true) sesler önce
-  const local  = de.filter(v => v.localService);
-  const remote = de.filter(v => !v.localService);
+  console.log("Seçilen ses:", _deVoice ? _deVoice.name : "varsayılan");
+}
 
-  // İsme göre tercih sırası (yerel sesler içinde)
-  const prefer = ["Karsten", "Hedda", "Stefanie", "Stefan", "Hans", "Katja"];
-  let found = null;
-  for (const name of prefer) {
-    found = local.find(v => v.name.includes(name));
-    if (found) break;
-  }
-  // Yerel tercih bulunamazsa ilk yerel Almanca sesi al
-  if (!found) found = local[0];
-  // O da yoksa ilk remote sesi al
-  if (!found) found = remote[0];
-
-  _deVoice = found || null;
-  console.log("Seçilen ses:", _deVoice ? `${_deVoice.name} (local:${_deVoice.localService})` : "yok");
+// Ses listesi bazen gecikmeli yüklenir (Chrome/Edge davranışı)
+if (window.speechSynthesis) {
+  window.speechSynthesis.onvoiceschanged = () => { loadVoices(); populateVoiceSelect(); };
+  loadVoices();
   populateVoiceSelect();
 }
 
-if (window.speechSynthesis) {
-  window.speechSynthesis.onvoiceschanged = loadVoices;
-  // Bazı tarayıcılarda hemen hazır gelir
-  setTimeout(loadVoices, 100);
-}
-
-// Ses dropdown'ını doldur — yerel sesler üstte, remote altta
+// Ses dropdown'ını doldur — sadece Almanca sesler
 function populateVoiceSelect() {
   const sel = document.getElementById("voice-select");
   if (!sel) return;
-  const all = window.speechSynthesis.getVoices();
-  const de  = all.filter(v => v.lang.startsWith("de"));
-  if (!de.length) return;
-
-  // Yerel önce, remote sonra; her grup isime göre sıralı
-  const sorted = [
-    ...de.filter(v =>  v.localService).sort((a,b) => a.name.localeCompare(b.name)),
-    ...de.filter(v => !v.localService).sort((a,b) => a.name.localeCompare(b.name)),
-  ];
+  const voices = window.speechSynthesis.getVoices();
+  const deVoices = voices.filter(v => v.lang.startsWith("de"));
+  if (!deVoices.length) return;
 
   sel.innerHTML = "";
+
+  // Önce Konrad ve Microsoft seslerini üste al
+  const sorted = [
+    ...deVoices.filter(v => v.name.includes("Konrad")),
+    ...deVoices.filter(v => v.name.includes("Microsoft") && !v.name.includes("Konrad")),
+    ...deVoices.filter(v => !v.name.includes("Microsoft")),
+  ];
+
   sorted.forEach(v => {
     const o = document.createElement("option");
     o.value = v.name;
-    const tag  = v.localService ? " ✓" : " (online)";
-    // İsmi kısalt: "Microsoft Karsten - German (Switzerland)" → "Karsten (CH)"
-    let label = v.name
-      .replace("Microsoft ", "")
-      .replace(" - German (Germany)", " (DE)")
-      .replace(" - German (Switzerland)", " (CH)")
-      .replace(" - German (Austria)", " (AT)")
-      .replace(" Online (Natural)", "");
-    o.innerText = label + tag;
+    // Edge Neural seslerini belirt
+    const tag = v.name.includes("Neural") ? " ⭐" : v.name.includes("Microsoft") ? " ✓" : "";
+    o.innerText = v.name.replace("Microsoft ", "").replace(" Online (Natural) - German (Germany)", "") + tag;
     if (_deVoice && v.name === _deVoice.name) o.selected = true;
     sel.appendChild(o);
   });
@@ -402,8 +390,7 @@ function populateVoiceSelect() {
 // Kullanıcı ses seçtiğinde
 function setVoice(name) {
   const voices = window.speechSynthesis.getVoices();
-  const found  = voices.find(v => v.name === name);
-  if (found) { _deVoice = found; console.log("Ses değişti:", found.name); }
+  _deVoice = voices.find(v => v.name === name) || _deVoice;
 }
 
 // Metinleri sırayla, doğal sesle seslendir
