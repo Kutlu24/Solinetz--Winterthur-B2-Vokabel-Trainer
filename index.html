@@ -103,7 +103,15 @@
         <button class="m1-act" onclick="showMenu()">🏠 Home</button>
         <button class="m1-act danger" onclick="doReset()">🔄 Zurücksetzen</button>
       </div>
-
+      <div class="m1-voice-row">
+        <label class="m1-fi" style="flex:1">
+          <span>🔊 Stimme (Karsten German (Switzerland) empfohlen)</span>
+          <select id="voice-select" onchange="setVoice(this.value)">
+            <option value="">Wird geladen...</option>
+          </select>
+        </label>
+        <button class="m1-act" onclick="ttsSpeak(['Guten Tag! Das ist ein Aussprache-Test auf Deutsch.'])">▶ Testen</button>
+      </div>
     </div>
 
     <!-- Lernkarten -->

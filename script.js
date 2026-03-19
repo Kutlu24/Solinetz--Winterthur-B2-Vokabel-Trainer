@@ -278,10 +278,6 @@ function doFlip() {
   if (inner.classList.contains("flipped")) doAudio();
 }
 
-// ── SES SİSTEMİ (Web Speech API) ──────────────────────
-// Tüm tarayıcılarda standart çalışır.
-// opus dosyası → kelimeyi çalar, bitince gramer+cümle TTS ile okunur.
-
 function doAudio() {
   const item = m1Session[m1Index];
   if (!item) return;
@@ -290,75 +286,153 @@ function doAudio() {
   const file = item[K_AUDIO] || item[K_AUDIO2] || "";
 
   if (isFlipped) {
+    // Arka yüz: sadece Beispielsatz — TTS ile oku (opus sadece kelime içeriyor)
     ttsSpeak([item[K_SENT] || ""]);
   } else {
+    // Ön yüz: önce .opus ile kelimeyi çal, bitince gramer + cümleyi TTS ile oku
     if (file) {
-      const opusEl = document.getElementById("m1-audio");
-      opusEl.src = file;
-      opusEl.currentTime = 0;
-      opusEl.onended = null;
-      opusEl.play()
-        .then(() => {
-          opusEl.onended = () => {
-            ttsSpeak([item[K_GRAMM]||"", item[K_SENT]||""].filter(Boolean));
-          };
-        })
+      const a = document.getElementById("m1-audio");
+      a.src = file;
+      a.currentTime = 0;
+
+      // Önceki dinleyiciyi temizle
+      a.onended = null;
+
+      const afterOpus = () => {
+        const parts = [
+          item[K_GRAMM] || "",
+          item[K_SENT]  || ""
+        ].filter(Boolean);
+        ttsSpeak(parts);
+      };
+
+      a.play()
+        .then(() => { a.onended = afterOpus; })
         .catch(() => {
-          ttsSpeak([item[K_WORT]||"", item[K_GRAMM]||"", item[K_SENT]||""].filter(Boolean));
+          // opus çalamazsa tümünü TTS ile oku
+          ttsSpeak([
+            item[K_WORT]  || "",
+            item[K_GRAMM] || "",
+            item[K_SENT]  || ""
+          ].filter(Boolean));
         });
     } else {
-      ttsSpeak([item[K_WORT]||"", item[K_GRAMM]||"", item[K_SENT]||""].filter(Boolean));
+      // opus yoksa tümünü TTS ile oku
+      ttsSpeak([
+        item[K_WORT]  || "",
+        item[K_GRAMM] || "",
+        item[K_SENT]  || ""
+      ].filter(Boolean));
     }
   }
 }
 
-// Metinleri sırayla seslendir — onend zinciri ile güvenli kuyruk
-function ttsSpeak(parts) {
-  if (!window.speechSynthesis) return;
-  window.speechSynthesis.cancel();
+// ── SES YÖNETİMİ ──────────────────────────────────────
+// Edge Neural sesleri (Konrad vb.) speechSynthesis ile çalışmıyor.
+// En güvenilir yol: localService:true olan sistem seslerini kullan.
+// Öncelik: Karsten (CH) → Hedda → Stefanie → herhangi Almanca yerel ses
 
-  const list = parts.map(p => (p||"").trim()).filter(Boolean);
-  if (!list.length) return;
+let _deVoice = null;
 
-  let idx = 0;
-  function next() {
-    if (idx >= list.length) return;
-    const u = new SpeechSynthesisUtterance(list[idx++]);
-    u.lang   = "de-DE";
-    u.rate   = 0.9;
-    u.pitch  = 1;
-    u.volume = 1;
-    u.onend  = next;
-    u.onerror = next;
-    window.speechSynthesis.speak(u);
+function loadVoices() {
+  const all = window.speechSynthesis.getVoices();
+  if (!all.length) return;
+
+  const de = all.filter(v => v.lang.startsWith("de"));
+
+  // Öncelik: yerel (localService:true) sesler önce
+  const local  = de.filter(v => v.localService);
+  const remote = de.filter(v => !v.localService);
+
+  // İsme göre tercih sırası (yerel sesler içinde)
+  const prefer = ["Karsten", "Hedda", "Stefanie", "Stefan", "Hans", "Katja"];
+  let found = null;
+  for (const name of prefer) {
+    found = local.find(v => v.name.includes(name));
+    if (found) break;
   }
-  next();
+  // Yerel tercih bulunamazsa ilk yerel Almanca sesi al
+  if (!found) found = local[0];
+  // O da yoksa ilk remote sesi al
+  if (!found) found = remote[0];
+
+  _deVoice = found || null;
+  console.log("Seçilen ses:", _deVoice ? `${_deVoice.name} (local:${_deVoice.localService})` : "yok");
+  populateVoiceSelect();
 }
 
-function tts(text) {
-  if (text) ttsSpeak([text]);
+if (window.speechSynthesis) {
+  window.speechSynthesis.onvoiceschanged = loadVoices;
+  // Bazı tarayıcılarda hemen hazır gelir
+  setTimeout(loadVoices, 100);
 }
 
-// Ses seçici — tarayıcının mevcut Almanca seslerini listeler
+// Ses dropdown'ını doldur — yerel sesler üstte, remote altta
 function populateVoiceSelect() {
   const sel = document.getElementById("voice-select");
   if (!sel) return;
-  const voices = window.speechSynthesis.getVoices().filter(v => v.lang.startsWith("de"));
-  if (!voices.length) return;
+  const all = window.speechSynthesis.getVoices();
+  const de  = all.filter(v => v.lang.startsWith("de"));
+  if (!de.length) return;
+
+  // Yerel önce, remote sonra; her grup isime göre sıralı
+  const sorted = [
+    ...de.filter(v =>  v.localService).sort((a,b) => a.name.localeCompare(b.name)),
+    ...de.filter(v => !v.localService).sort((a,b) => a.name.localeCompare(b.name)),
+  ];
+
   sel.innerHTML = "";
-  voices.forEach(v => {
+  sorted.forEach(v => {
     const o = document.createElement("option");
     o.value = v.name;
-    o.innerText = v.name.replace("Microsoft ","").replace(" - German (Germany)"," (DE)").replace(" - German (Switzerland)"," (CH)").replace(" - German (Austria)"," (AT)");
+    const tag  = v.localService ? " ✓" : " (online)";
+    // İsmi kısalt: "Microsoft Karsten - German (Switzerland)" → "Karsten (CH)"
+    let label = v.name
+      .replace("Microsoft ", "")
+      .replace(" - German (Germany)", " (DE)")
+      .replace(" - German (Switzerland)", " (CH)")
+      .replace(" - German (Austria)", " (AT)")
+      .replace(" Online (Natural)", "");
+    o.innerText = label + tag;
+    if (_deVoice && v.name === _deVoice.name) o.selected = true;
     sel.appendChild(o);
   });
 }
 
-function setVoice() {} // Şu an kullanılmıyor — tüm tarayıcılarda varsayılan Almanca ses
+// Kullanıcı ses seçtiğinde
+function setVoice(name) {
+  const voices = window.speechSynthesis.getVoices();
+  const found  = voices.find(v => v.name === name);
+  if (found) { _deVoice = found; console.log("Ses değişti:", found.name); }
+}
 
-if (window.speechSynthesis) {
-  window.speechSynthesis.onvoiceschanged = populateVoiceSelect;
-  setTimeout(populateVoiceSelect, 200);
+// Metinleri sırayla, doğal sesle seslendir
+function ttsSpeak(parts) {
+  if (!parts.length || !window.speechSynthesis) return;
+  window.speechSynthesis.cancel();
+  loadVoices(); // henüz yüklenmediyse tekrar dene
+
+  let i = 0;
+  function speakNext() {
+    if (i >= parts.length) return;
+    const text = parts[i++];
+    if (!text.trim()) { speakNext(); return; }
+
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang  = "de-DE";
+    u.rate  = i === 1 ? 0.80 : 0.88;
+    u.pitch = 1.0;
+    u.volume = 1.0;
+    if (_deVoice) u.voice = _deVoice;
+    u.onend   = speakNext;
+    u.onerror = speakNext; // hata olursa sonrakine geç
+    window.speechSynthesis.speak(u);
+  }
+  speakNext();
+}
+
+function tts(text) {
+  if (text) ttsSpeak([text]);
 }
 
 function doLearned() {
