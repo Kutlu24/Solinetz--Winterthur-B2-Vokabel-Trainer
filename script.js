@@ -278,6 +278,10 @@ function doFlip() {
   if (inner.classList.contains("flipped")) doAudio();
 }
 
+// ── SES SİSTEMİ (Web Speech API) ──────────────────────
+// Tüm tarayıcılarda standart çalışır.
+// opus dosyası → kelimeyi çalar, bitince gramer+cümle TTS ile okunur.
+
 function doAudio() {
   const item = m1Session[m1Index];
   if (!item) return;
@@ -286,140 +290,106 @@ function doAudio() {
   const file = item[K_AUDIO] || item[K_AUDIO2] || "";
 
   if (isFlipped) {
-    // Arka yüz: sadece Beispielsatz — TTS ile oku (opus sadece kelime içeriyor)
     ttsSpeak([item[K_SENT] || ""]);
   } else {
-    // Ön yüz: önce .opus ile kelimeyi çal, bitince gramer + cümleyi TTS ile oku
     if (file) {
-      const a = document.getElementById("m1-audio");
-      a.src = file;
-      a.currentTime = 0;
-
-      // Önceki dinleyiciyi temizle
-      a.onended = null;
-
-      const afterOpus = () => {
-        const parts = [
-          item[K_GRAMM] || "",
-          item[K_SENT]  || ""
-        ].filter(Boolean);
-        ttsSpeak(parts);
-      };
-
-      a.play()
-        .then(() => { a.onended = afterOpus; })
+      const opusEl = document.getElementById("m1-audio");
+      opusEl.src = file;
+      opusEl.currentTime = 0;
+      opusEl.onended = null;
+      opusEl.play()
+        .then(() => {
+          opusEl.onended = () => {
+            ttsSpeak([item[K_GRAMM]||"", item[K_SENT]||""].filter(Boolean));
+          };
+        })
         .catch(() => {
-          // opus çalamazsa tümünü TTS ile oku
-          ttsSpeak([
-            item[K_WORT]  || "",
-            item[K_GRAMM] || "",
-            item[K_SENT]  || ""
-          ].filter(Boolean));
+          ttsSpeak([item[K_WORT]||"", item[K_GRAMM]||"", item[K_SENT]||""].filter(Boolean));
         });
     } else {
-      // opus yoksa tümünü TTS ile oku
-      ttsSpeak([
-        item[K_WORT]  || "",
-        item[K_GRAMM] || "",
-        item[K_SENT]  || ""
-      ].filter(Boolean));
+      ttsSpeak([item[K_WORT]||"", item[K_GRAMM]||"", item[K_SENT]||""].filter(Boolean));
     }
   }
 }
 
-// Ses tercihi: Edge öncelik sırası
-// 1) Microsoft Konrad (Edge Azure Neural)
-// 2) Diğer Microsoft Almanca sesler
-// 3) Diğer Almanca sesler (Google hariç)
-// 4) Herhangi Almanca ses
-let _deVoice = null;
-let _voicesLoaded = false;
-
-function loadVoices() {
-  if (_voicesLoaded) return;
-  const voices = window.speechSynthesis.getVoices();
-  if (!voices.length) return;
-  _voicesLoaded = true;
-
-  // Öncelik sırası
-  _deVoice =
-    voices.find(v => v.name.includes("Konrad"))                          // Edge: Microsoft Konrad
-    || voices.find(v => v.name.includes("Microsoft") && v.lang === "de-DE" && v.name.includes("Neural"))
-    || voices.find(v => v.name.includes("Microsoft") && v.lang.startsWith("de"))
-    || voices.find(v => v.lang === "de-DE" && !v.name.toLowerCase().includes("google"))
-    || voices.find(v => v.lang.startsWith("de"));
-
-  console.log("Seçilen ses:", _deVoice ? _deVoice.name : "varsayılan");
-}
-
-// Ses listesi bazen gecikmeli yüklenir (Chrome/Edge davranışı)
-if (window.speechSynthesis) {
-  window.speechSynthesis.onvoiceschanged = () => { loadVoices(); populateVoiceSelect(); };
-  loadVoices();
-  populateVoiceSelect();
-}
-
-// Ses dropdown'ını doldur — sadece Almanca sesler
-function populateVoiceSelect() {
-  const sel = document.getElementById("voice-select");
-  if (!sel) return;
-  const voices = window.speechSynthesis.getVoices();
-  const deVoices = voices.filter(v => v.lang.startsWith("de"));
-  if (!deVoices.length) return;
-
-  sel.innerHTML = "";
-
-  // Önce Konrad ve Microsoft seslerini üste al
-  const sorted = [
-    ...deVoices.filter(v => v.name.includes("Konrad")),
-    ...deVoices.filter(v => v.name.includes("Microsoft") && !v.name.includes("Konrad")),
-    ...deVoices.filter(v => !v.name.includes("Microsoft")),
-  ];
-
-  sorted.forEach(v => {
-    const o = document.createElement("option");
-    o.value = v.name;
-    // Edge Neural seslerini belirt
-    const tag = v.name.includes("Neural") ? " ⭐" : v.name.includes("Microsoft") ? " ✓" : "";
-    o.innerText = v.name.replace("Microsoft ", "").replace(" Online (Natural) - German (Germany)", "") + tag;
-    if (_deVoice && v.name === _deVoice.name) o.selected = true;
-    sel.appendChild(o);
-  });
-}
-
-// Kullanıcı ses seçtiğinde
-function setVoice(name) {
-  const voices = window.speechSynthesis.getVoices();
-  _deVoice = voices.find(v => v.name === name) || _deVoice;
-}
-
-// Metinleri sırayla, doğal sesle seslendir
+// Metinleri sırayla seslendir — onend zinciri ile güvenli kuyruk
 function ttsSpeak(parts) {
-  if (!parts.length || !window.speechSynthesis) return;
+  if (!window.speechSynthesis) return;
   window.speechSynthesis.cancel();
-  loadVoices(); // henüz yüklenmediyse tekrar dene
 
-  let i = 0;
-  function speakNext() {
-    if (i >= parts.length) return;
-    const text = parts[i++];
-    if (!text.trim()) { speakNext(); return; }
+  const list = parts.map(p => (p||"").trim()).filter(Boolean);
+  if (!list.length) return;
 
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang  = "de-DE";
-    u.rate  = i === 1 ? 0.80 : 0.88;
-    u.pitch = 1.0;
-    u.volume = 1.0;
-    if (_deVoice) u.voice = _deVoice;
-    u.onend   = speakNext;
-    u.onerror = speakNext; // hata olursa sonrakine geç
+  // Ses seçimini burada yenile — dropdown'daki güncel seçimi oku
+  const sel = document.getElementById("voice-select");
+  if (sel && sel.value) {
+    const all = window.speechSynthesis.getVoices();
+    const found = all.find(v => v.name === sel.value);
+    if (found) _selectedVoice = found;
+  }
+
+  let idx = 0;
+  function next() {
+    if (idx >= list.length) return;
+    const u = new SpeechSynthesisUtterance(list[idx++]);
+    // voice atandıktan SONRA lang atama — override sorununu önler
+    if (_selectedVoice) {
+      u.voice = _selectedVoice;
+      u.lang  = _selectedVoice.lang;
+    } else {
+      u.lang  = "de-DE";
+    }
+    u.rate   = 0.9;
+    u.pitch  = 1;
+    u.volume = 1;
+    u.onend  = next;
+    u.onerror = next;
     window.speechSynthesis.speak(u);
   }
-  speakNext();
+  next();
 }
 
 function tts(text) {
   if (text) ttsSpeak([text]);
+}
+
+// ── SES SEÇİCİ — sadece 4 ses: Karsten, Hedda, Katja, Stefan ──
+// Bu 4 ses tüm tarayıcılarda (Edge/Chrome/Firefox) çalışır.
+
+let _selectedVoice = null;
+
+const PREFERRED = ["Karsten", "Hedda", "Katja", "Stefan"];
+
+function populateVoiceSelect() {
+  const sel = document.getElementById("voice-select");
+  if (!sel) return;
+
+  const all = window.speechSynthesis.getVoices();
+  // Sadece istenen 4 ses
+  const filtered = PREFERRED
+    .map(name => all.find(v => v.name.includes(name) && v.lang.startsWith("de")))
+    .filter(Boolean);
+
+  if (!filtered.length) return;
+
+  sel.innerHTML = "";
+  filtered.forEach((v, i) => {
+    const o = document.createElement("option");
+    o.value = v.name;
+    o.innerText = v.name.replace("Microsoft ","").replace(/ - German.*/,"");
+    sel.appendChild(o);
+    if (i === 0) _selectedVoice = v; // varsayılan: Karsten
+  });
+}
+
+function setVoice(name) {
+  const all = window.speechSynthesis.getVoices();
+  _selectedVoice = all.find(v => v.name === name) || _selectedVoice;
+}
+
+if (window.speechSynthesis) {
+  window.speechSynthesis.onvoiceschanged = populateVoiceSelect;
+  setTimeout(populateVoiceSelect, 200);
 }
 
 function doLearned() {
