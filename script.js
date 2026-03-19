@@ -320,15 +320,28 @@ function ttsSpeak(parts) {
   const list = parts.map(p => (p||"").trim()).filter(Boolean);
   if (!list.length) return;
 
+  // Ses seçimini burada yenile — dropdown'daki güncel seçimi oku
+  const sel = document.getElementById("voice-select");
+  if (sel && sel.value) {
+    const all = window.speechSynthesis.getVoices();
+    const found = all.find(v => v.name === sel.value);
+    if (found) _selectedVoice = found;
+  }
+
   let idx = 0;
   function next() {
     if (idx >= list.length) return;
     const u = new SpeechSynthesisUtterance(list[idx++]);
-    u.lang   = "de-DE";
+    // voice atandıktan SONRA lang atama — override sorununu önler
+    if (_selectedVoice) {
+      u.voice = _selectedVoice;
+      u.lang  = _selectedVoice.lang;
+    } else {
+      u.lang  = "de-DE";
+    }
     u.rate   = 0.9;
     u.pitch  = 1;
     u.volume = 1;
-    if (_selectedVoice) u.voice = _selectedVoice;
     u.onend  = next;
     u.onerror = next;
     window.speechSynthesis.speak(u);
